@@ -1,0 +1,164 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // 1. User Profiles Collection:
+    // Strictly private to each individual user (Zero leak, Zero enumeration).
+    // Direct get & list are completely forbidden to any other user.
+    match /users/{uid} {
+      allow read, write: if isUser(uid);
+      allow delete: if false;
+    }
+
+    // 2. User Lookups Collection (for project member invitation by exact email):
+    // - allow get: permitted for authenticated users who already know the EXACT email address.
+    // - allow list: if false (CRITICAL: Strictly prevents bulk queries, pagination, or batch scraping!).
+    // - minimal data only: uid, email, displayName.
+    match /user_lookups/{lookupEmail} {
+      allow get: if isAuthenticated();
+      allow list: if false;
+      allow create, update: if isAuthenticated() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.email == lookupEmail;
+      allow delete: if false;
+    }
+
+    // 3. Projects collection
+    match /projects/{projectId} {
+      // Member or Owner can read
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        request.auth.uid == resource.data.ownerId ||
+        request.auth.uid in resource.data.memberIds
+      );
+
+      // Create: Authenticated user must set themselves as owner & in memberIds
+      allow create: if isAuthenticated() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.memberIds.hasAny([request.auth.uid]);
+
+      // Update: Owner only; ownerId is immutable; only allowed project fields can be updated
+      allow update: if isAuthenticated() &&
+        resource.data.ownerId == request.auth.uid &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'description', 'memberIds', 'members', 'updatedAt', 'version'
+        ]);
+
+      // Delete: Owner only
+      allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+
+      // Project Tasks subcollection
+      match /tasks/{taskId} {
+        function getParentProject() {
+          return get(/databases/$(database)/documents/projects/$(projectId)).data;
+        }
+
+        function isParentProjectOwner() {
+          return isAuthenticated() &&
+            request.auth.uid == getParentProject().ownerId;
+        }
+
+        function isParentProjectMember() {
+          return isAuthenticated() && (
+            request.auth.uid == getParentProject().ownerId ||
+            request.auth.uid in getParentProject().memberIds
+          );
+        }
+
+        function isValidAssignee(assigneeId) {
+          return assigneeId == null ||
+                 assigneeId == '' ||
+                 assigneeId == getParentProject().ownerId ||
+                 assigneeId in getParentProject().memberIds;
+        }
+
+        function hasImmutableTaskFields() {
+          return request.resource.data.createdBy == resource.data.createdBy &&
+                 request.resource.data.projectId == resource.data.projectId;
+        }
+
+        // Read: Project members or owner
+        allow read: if isParentProjectMember();
+
+        // Create: Project member or owner, createdBy must be current user, projectId must match parent, assignee must be in project
+        allow create: if isParentProjectMember() &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.projectId == projectId &&
+          isValidAssignee(request.resource.data.assigneeId);
+
+        // Update:
+        // Precise field-level whitelisting using affectedKeys().hasOnly(...) for each role:
+        //
+        // 1. Owner: can update details, status, priority, due date, assignee (must be valid project member), version, updatedAt.
+        //    Immutable: createdBy, projectId, id.
+        //
+        // 2. Assignee: can update status, title, description, priority, due date, version, updatedAt.
+        //    CANNOT update: assigneeId, assigneeName, assigneeEmail (cannot reassign!), createdBy, projectId.
+        //
+        // 3. Creator: can update details, priority, due date, assignee (must be valid project member), version, updatedAt.
+        //    CANNOT update: status (only Owner or Assignee can advance status!), createdBy, projectId.
+        allow update: if (
+          isParentProjectOwner() &&
+          hasImmutableTaskFields() &&
+          isValidAssignee(request.resource.data.assigneeId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'description', 'status', 'priority', 'assigneeId', 'assigneeName', 'assigneeEmail', 'dueDate', 'updatedAt', 'version'
+          ])
+        ) || (
+          isParentProjectMember() &&
+          resource.data.assigneeId == request.auth.uid &&
+          hasImmutableTaskFields() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'description', 'status', 'priority', 'dueDate', 'updatedAt', 'version'
+          ])
+        ) || (
+          isParentProjectMember() &&
+          resource.data.createdBy == request.auth.uid &&
+          hasImmutableTaskFields() &&
+          isValidAssignee(request.resource.data.assigneeId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'description', 'priority', 'assigneeId', 'assigneeName', 'assigneeEmail', 'dueDate', 'updatedAt', 'version'
+          ])
+        );
+
+        // Delete: Project Owner or Task Creator ONLY (SRS FR-10)
+        allow delete: if isParentProjectOwner() ||
+          (isParentProjectMember() && resource.data.createdBy == request.auth.uid);
+      }
+
+      // Project Activities subcollection (Audit log)
+      match /activities/{activityId} {
+        function getParentProject() {
+          return get(/databases/$(database)/documents/projects/$(projectId)).data;
+        }
+
+        function isParentProjectMember() {
+          return isAuthenticated() && (
+            request.auth.uid == getParentProject().ownerId ||
+            request.auth.uid in getParentProject().memberIds
+          );
+        }
+
+        function isParentProjectOwner() {
+          return isAuthenticated() &&
+            request.auth.uid == getParentProject().ownerId;
+        }
+
+        allow read: if isParentProjectMember();
+        allow create: if isParentProjectMember() && request.resource.data.actorUid == request.auth.uid;
+        allow update: if false; // Immutable audit log
+        allow delete: if isParentProjectOwner(); // Safe cascade cleanup by project owner
+      }
+    }
+  }
+}

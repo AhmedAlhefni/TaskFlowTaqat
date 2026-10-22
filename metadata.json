@@ -1,0 +1,6 @@
+{
+  "name": "TaskFlow - Project & Task Management System",
+  "description": "Production-grade project and task management platform with Firebase auth, Firestore real-time persistence, Kanban boards, and role-based permissions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
