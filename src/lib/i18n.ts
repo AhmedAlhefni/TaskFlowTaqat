@@ -246,6 +246,8 @@ export const translations = {
     language: "اللغة",
     close: "إغلاق",
     backToDashboard: "العودة للوحة التحكم",
+    pageNotFoundTitle: "عذرًا، لم نعثر على هذه الصفحة",
+    pageNotFoundDescription: "قد يكون الرابط غير صحيح أو أن الصفحة لم تعد متاحة. يمكنك العودة إلى لوحة التحكم ومتابعة عملك.",
     createdBy: "أنشئت بواسطة",
     // Quick Actions & My Tasks
     quickActions: "الإجراءات السريعة",
@@ -531,6 +533,8 @@ export const translations = {
     language: "Language",
     close: "Close",
     backToDashboard: "Back to Dashboard",
+    pageNotFoundTitle: "Sorry, we couldn't find this page",
+    pageNotFoundDescription: "The link may be incorrect or the page may no longer be available. Return to your dashboard to continue working.",
     createdBy: "Created by",
     // Quick Actions & My Tasks
     quickActions: "Quick Actions",

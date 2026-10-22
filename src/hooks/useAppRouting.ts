@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
-export type AppView = "dashboard" | "projects" | "project-detail" | "my-tasks";
+export type AppView = "dashboard" | "projects" | "project-detail" | "my-tasks" | "not-found";
 export type AuthRouteMode = "login" | "register" | null;
 
 export interface AppRoute {
@@ -15,6 +15,7 @@ export interface AppRoute {
 export function readAppRoute(): AppRoute {
   try {
     const path = window.location.pathname.replace(/\/+$/, "") || "/";
+    if (path === "/") return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: null };
     if (path === "/login") return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: "login" };
     if (path === "/register") return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: "register" };
     if (path === "/projects/new") return { view: "projects", projectId: null, createProject: true, settings: false, authMode: null };
@@ -40,9 +41,9 @@ export function readAppRoute(): AppRoute {
     if (hash === "#/projects") return { view: "projects", projectId: null, createProject: false, settings: false, authMode: null };
     if (hash === "#/my-tasks") return { view: "my-tasks", projectId: null, createProject: false, settings: false, authMode: null };
 
-    return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: null };
+    return { view: "not-found", projectId: null, createProject: false, settings: false, authMode: null };
   } catch {
-    return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: null };
+    return { view: "not-found", projectId: null, createProject: false, settings: false, authMode: null };
   }
 }
 
@@ -74,6 +75,14 @@ export function useAppRouting(state: AppRoutingState): void {
     let targetPath = "/dashboard";
     if (!isAuthenticated) {
       targetPath = `/${authRouteMode || "login"}`;
+      if (currentView === "not-found") {
+        setCurrentView("dashboard");
+        setSelectedProjectId(null);
+        setCreateProjectOpen(false);
+        setProjectSettingsRoute(false);
+      }
+    } else if (currentView === "not-found") {
+      return;
     } else if (createProjectOpen) {
       targetPath = "/projects/new";
     } else if (currentView === "project-detail" && selectedProjectId) {
@@ -91,7 +100,7 @@ export function useAppRouting(state: AppRoutingState): void {
         window.history.pushState(null, "", targetPath);
       }
     }
-  }, [currentView, selectedProjectId, createProjectOpen, projectSettingsRoute, isAuthenticated, authRouteMode, authLoading]);
+  }, [currentView, selectedProjectId, createProjectOpen, projectSettingsRoute, isAuthenticated, authRouteMode, authLoading, setCurrentView, setSelectedProjectId, setCreateProjectOpen, setProjectSettingsRoute]);
 
   useEffect(() => {
     const syncFromHistory = () => {

@@ -28,6 +28,7 @@ import {
 import { createTask } from "@/src/services/taskService";
 import { getProjectActivities } from "@/src/services/activityService";
 import { FirestoreRulesBanner } from "@/src/components/common/FirestoreRulesBanner";
+import { NotFoundPage } from "@/src/components/common/NotFoundPage";
 
 function MainApp() {
   const { currentUser, userProfile, loading } = useAuth();
@@ -37,7 +38,7 @@ function MainApp() {
   const initialRoute = React.useMemo(() => readAppRoute(), []);
   const [authRouteMode, setAuthRouteMode] = useState<"login" | "register" | null>(initialRoute.authMode);
 
-  const [currentView, setCurrentView] = useState<"dashboard" | "projects" | "project-detail" | "my-tasks">(
+  const [currentView, setCurrentView] = useState<"dashboard" | "projects" | "project-detail" | "my-tasks" | "not-found">(
     initialRoute.view
   );
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialRoute.projectId);
@@ -237,7 +238,7 @@ function MainApp() {
       {/* Sidebar for Authenticated Users */}
       {currentUser && userProfile && (
         <Sidebar
-          currentView={currentView}
+          currentView={currentView === "not-found" ? "dashboard" : currentView}
           selectedProjectId={selectedProjectId}
           projects={projects}
           allTasksMap={allTasksMap}
@@ -268,7 +269,7 @@ function MainApp() {
       {/* Main Content Area with Header */}
       <div className="flex-1 flex flex-col min-w-0">
         <Navbar
-          currentView={currentView}
+          currentView={currentView === "not-found" ? "dashboard" : currentView}
           projectName={selectedProject?.name}
           projects={projects}
           selectedProjectId={selectedProjectId}
@@ -304,6 +305,15 @@ function MainApp() {
             <AuthScreen
               initialMode={authRouteMode || "login"}
               onModeChange={(mode) => setAuthRouteMode(mode)}
+            />
+          ) : currentView === "not-found" ? (
+            <NotFoundPage
+              onGoToDashboard={() => {
+                setIsProjectSettingsRoute(false);
+                setIsCreateProjectModalOpen(false);
+                setSelectedProjectId(null);
+                setCurrentView("dashboard");
+              }}
             />
           ) : loadFailed ? (
             <section role="alert" className="max-w-xl mx-auto mt-16 rounded-2xl border border-amber-300 bg-white dark:bg-slate-900 p-8 text-center">
