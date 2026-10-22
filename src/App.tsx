@@ -15,8 +15,9 @@ import { ProjectOnboardingModal } from "@/src/components/projects/ProjectOnboard
 import { ProjectSettingsModal } from "@/src/components/projects/ProjectSettingsModal";
 import { TaskModal } from "@/src/components/tasks/TaskModal";
 import { Project, Task, Activity, ProjectMemberInfo } from "@/src/types";
+import { readAppRoute, useAppRouting } from "@/src/hooks/useAppRouting";
+import { useWorkspaceData } from "@/src/hooks/useWorkspaceData";
 import {
-  subscribeUserProjects,
   createProject,
   getProject,
   updateProject,
@@ -24,59 +25,24 @@ import {
   removeProjectMember,
   deleteProject,
 } from "@/src/services/projectService";
-import { subscribeProjectTasks, createTask } from "@/src/services/taskService";
+import { createTask } from "@/src/services/taskService";
 import { getProjectActivities } from "@/src/services/activityService";
 import { FirestoreRulesBanner } from "@/src/components/common/FirestoreRulesBanner";
-import { localStore } from "@/src/services/localStore";
-
-// Read both the current path URLs and legacy hash URLs so existing bookmarks keep working.
-const getInitialRoute = (): {
-  view: "dashboard" | "projects" | "project-detail" | "my-tasks";
-  projectId: string | null;
-  createProject: boolean;
-  settings: boolean;
-} => {
-  try {
-    const path = window.location.pathname.replace(/\/+$/, "") || "/";
-    if (path === "/projects/new") return { view: "projects", projectId: null, createProject: true, settings: false };
-    if (path === "/projects") return { view: "projects", projectId: null, createProject: false, settings: false };
-    if (path === "/my-tasks") return { view: "my-tasks", projectId: null, createProject: false, settings: false };
-    const projectMatch = path.match(/^\/projects\/([^/]+)(\/settings)?$/);
-    if (projectMatch && projectMatch[1] !== "new") {
-      return { view: "project-detail", projectId: decodeURIComponent(projectMatch[1]), createProject: false, settings: !!projectMatch[2] };
-    }
-    if (path === "/" || path === "/dashboard") return { view: "dashboard", projectId: null, createProject: false, settings: false };
-
-    const hash = window.location.hash;
-    if (hash.startsWith("#/project/")) {
-      const pId = hash.replace("#/project/", "").trim();
-      if (pId) return { view: "project-detail", projectId: pId, createProject: false, settings: false };
-    }
-    if (hash === "#/projects") return { view: "projects", projectId: null, createProject: false, settings: false };
-    if (hash === "#/my-tasks") return { view: "my-tasks", projectId: null, createProject: false, settings: false };
-
-  } catch {}
-  return { view: "dashboard", projectId: null, createProject: false, settings: false };
-};
 
 function MainApp() {
   const { currentUser, userProfile, loading } = useAuth();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { showToast } = useToast();
 
-  const initialRoute = React.useMemo(() => getInitialRoute(), []);
-  const initialAuthMode = window.location.pathname === "/register" ? "register" : window.location.pathname === "/login" ? "login" : null;
-  const [authRouteMode, setAuthRouteMode] = useState<"login" | "register" | null>(initialAuthMode);
+  const initialRoute = React.useMemo(() => readAppRoute(), []);
+  const [authRouteMode, setAuthRouteMode] = useState<"login" | "register" | null>(initialRoute.authMode);
 
   const [currentView, setCurrentView] = useState<"dashboard" | "projects" | "project-detail" | "my-tasks">(
     initialRoute.view
   );
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialRoute.projectId);
   const [isProjectSettingsRoute, setIsProjectSettingsRoute] = useState(initialRoute.settings);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectsLoaded, setProjectsLoaded] = useState(false);
-
-  const [allTasksMap, setAllTasksMap] = useState<Record<string, Task[]>>({});
+  const { projects, projectsLoaded, allTasksMap, setAllTasksMap, loadFailed } = useWorkspaceData(currentUser?.uid || null, loading);
 
   const [currentProjectActivities, setCurrentProjectActivities] = useState<Activity[]>([]);
 
@@ -92,41 +58,22 @@ function MainApp() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
-  // Keep the URL in sync with the selected view and create a real browser history entry.
-  useEffect(() => {
-    let targetPath = !currentUser && authRouteMode ? `/${authRouteMode}` : "/dashboard";
-    if (isCreateProjectModalOpen) targetPath = "/projects/new";
-    else if (!(!currentUser && authRouteMode) && currentView === "project-detail" && selectedProjectId) {
-      targetPath = `/projects/${encodeURIComponent(selectedProjectId)}${isProjectSettingsRoute ? "/settings" : ""}`;
-    } else if (!(!currentUser && authRouteMode) && currentView === "projects") {
-      targetPath = "/projects";
-    } else if (!(!currentUser && authRouteMode) && currentView === "my-tasks") {
-      targetPath = "/my-tasks";
-    }
-    if (window.location.pathname !== targetPath || window.location.hash) {
-      window.history.pushState(null, "", targetPath);
-    }
-  }, [currentView, selectedProjectId, isCreateProjectModalOpen, isProjectSettingsRoute, currentUser, authRouteMode]);
+  useAppRouting({
+    currentView,
+    setCurrentView,
+    selectedProjectId,
+    setSelectedProjectId,
+    createProjectOpen: isCreateProjectModalOpen,
+    setCreateProjectOpen: setIsCreateProjectModalOpen,
+    projectSettingsRoute: isProjectSettingsRoute,
+    setProjectSettingsRoute: setIsProjectSettingsRoute,
+    authRouteMode,
+    setAuthRouteMode,
+    isAuthenticated: Boolean(currentUser),
+    authLoading: loading,
+  });
 
-  // Back/Forward changes route state without creating another history entry.
-  useEffect(() => {
-    const readRoute = () => {
-      const route = getInitialRoute();
-      setCurrentView(route.view);
-      setSelectedProjectId(route.projectId);
-      setIsCreateProjectModalOpen(route.createProject);
-      setIsProjectSettingsRoute(route.settings);
-      setAuthRouteMode(window.location.pathname === "/register" ? "register" : window.location.pathname === "/login" ? "login" : null);
-    };
-    window.addEventListener("popstate", readRoute);
-    window.addEventListener("hashchange", readRoute);
-    return () => {
-      window.removeEventListener("popstate", readRoute);
-      window.removeEventListener("hashchange", readRoute);
-    };
-  }, []);
-
-  // Manage authentication lifecycle and project subscription
+  // Reset transient screen state when authentication changes.
   useEffect(() => {
     if (loading) return;
     if (!currentUser) {
@@ -136,93 +83,23 @@ function MainApp() {
       setOnboardingProject(null);
       setSettingsProject(null);
       setIsMobileSidebarOpen(false);
-      setProjects([]);
-      setProjectsLoaded(false);
-      setAllTasksMap({});
       return;
     }
-
-    const cachedProjects = localStore.getProjects(currentUser.uid);
-    setProjects(cachedProjects);
-    setProjectsLoaded(false);
-    setAllTasksMap(Object.fromEntries(cachedProjects.map((project) => [project.id, localStore.getTasks(project.id)])));
 
     // Only reset to dashboard if a DIFFERENT user account just signed in
     const lastAuthUser = localStorage.getItem("taskflow_last_auth_user");
     if (lastAuthUser && lastAuthUser !== currentUser.uid) {
       setCurrentView("dashboard");
       setSelectedProjectId(null);
+      setCurrentProjectActivities([]);
+      setIsCreateProjectModalOpen(false);
+      setIsGlobalCreateTaskOpen(false);
+      setOnboardingProject(null);
+      setSettingsProject(null);
     }
     localStorage.setItem("taskflow_last_auth_user", currentUser.uid);
 
-    const unsubscribeProjects = subscribeUserProjects(
-      currentUser.uid,
-      (updatedProjects) => {
-        setProjects(updatedProjects);
-        setProjectsLoaded(true);
-      },
-      (err) => {
-        console.error("Failed to subscribe to projects:", err);
-      }
-    );
-
-    return () => unsubscribeProjects();
   }, [currentUser, loading]);
-
-  // Subscribe to tasks for all accessible projects to compute global KPIs & project progress
-  useEffect(() => {
-    const activeProjectIds = new Set(projects.map((p) => p.id));
-
-    // 1. Immediately prune any deleted/stale project IDs from allTasksMap
-    setAllTasksMap((prev) => {
-      if (projects.length === 0) {
-        return Object.keys(prev).length === 0 ? prev : {};
-      }
-      let changed = false;
-      const next: Record<string, Task[]> = {};
-      for (const [pId, tasks] of Object.entries(prev)) {
-        if (activeProjectIds.has(pId)) {
-          next[pId] = tasks;
-        } else {
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-
-    // 2. Also clean up any orphan tasks in local store for projects that were deleted
-    localStore.cleanupOrphanTasks(projects.map((p) => p.id));
-
-    if (projects.length === 0) {
-      return;
-    }
-
-    const unsubscribers = projects.map((p) => {
-      return subscribeProjectTasks(
-        p.id,
-        (tasks) => {
-          setAllTasksMap((prev) => {
-            // Guard: ensure this project is still present in active projects
-            const currentActiveIds = new Set(projects.map((proj) => proj.id));
-            if (!currentActiveIds.has(p.id)) {
-              return prev;
-            }
-            return {
-              ...prev,
-              [p.id]: tasks,
-            };
-          });
-        },
-        (err) => {
-          console.error(`Failed to subscribe to tasks for project ${p.id}:`, err);
-        }
-      );
-    });
-
-    return () => {
-      unsubscribers.forEach((unsub) => unsub());
-    };
-  }, [projects]);
 
   // Fetch activities when selected project changes
   const fetchActivities = async (projectId: string) => {
@@ -235,24 +112,23 @@ function MainApp() {
   };
 
   useEffect(() => {
-    const cachedProject = selectedProjectId ? localStore.getProject(selectedProjectId) : null;
-    const hasProjectAccess = Boolean(currentUser && (
-      projects.some((project) => project.id === selectedProjectId) ||
-      (cachedProject && (cachedProject.ownerId === currentUser.uid || cachedProject.memberIds?.includes(currentUser.uid)))
-    ));
-    if (selectedProjectId && hasProjectAccess) {
-      fetchActivities(selectedProjectId);
-    }
+    setCurrentProjectActivities([]);
+    const hasProjectAccess = Boolean(currentUser && projects.some((project) => project.id === selectedProjectId));
+    if (!selectedProjectId || !hasProjectAccess) return;
+
+    let isCurrentProject = true;
+    getProjectActivities(selectedProjectId)
+      .then((activities) => {
+        if (isCurrentProject) setCurrentProjectActivities(activities);
+      })
+      .catch((error) => console.error("Failed to load activities:", error));
+
+    return () => {
+      isCurrentProject = false;
+    };
   }, [selectedProjectId, currentUser, projects]);
 
-  const selectedProject =
-    projects.find((p) => p.id === selectedProjectId) ||
-    (selectedProjectId && currentUser
-      ? (() => {
-          const cached = localStore.getProject(selectedProjectId);
-          return cached && (cached.ownerId === currentUser.uid || cached.memberIds?.includes(currentUser.uid)) ? cached : null;
-        })()
-      : null);
+  const selectedProject = projects.find((project) => project.id === selectedProjectId) || null;
 
   const handleOpenProject = (project: Project) => {
     setIsProjectSettingsRoute(false);
@@ -343,7 +219,7 @@ function MainApp() {
     return list;
   }, [activeSettingsProject, userProfile]);
 
-  if (loading) {
+  if (loading || (currentUser && !projectsLoaded && !loadFailed)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
         <div className="flex flex-col items-center gap-3">
@@ -429,6 +305,24 @@ function MainApp() {
               initialMode={authRouteMode || "login"}
               onModeChange={(mode) => setAuthRouteMode(mode)}
             />
+          ) : loadFailed ? (
+            <section role="alert" className="max-w-xl mx-auto mt-16 rounded-2xl border border-amber-300 bg-white dark:bg-slate-900 p-8 text-center">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                {language === "ar" ? "تعذر تأكيد صلاحية الوصول" : "Could not confirm project access"}
+              </h2>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                {language === "ar"
+                  ? "لم نعرض البيانات المحفوظة محليًا. تحقق من الاتصال وقواعد Firestore ثم أعد المحاولة."
+                  : "Cached project data is hidden until Firestore confirms access. Check your connection and rules, then retry."}
+              </p>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="mt-5 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+              >
+                {language === "ar" ? "إعادة المحاولة" : "Retry"}
+              </button>
+            </section>
           ) : currentView === "project-detail" ? selectedProject ? (
             <ProjectDetailView
               project={selectedProject}

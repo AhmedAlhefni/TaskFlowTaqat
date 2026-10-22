@@ -64,13 +64,11 @@ export const getProjectActivities = async (
       ...docSnap.data(),
     })) as Activity[];
 
-    if (results.length > 0) return results;
+    return results;
   } catch (err: any) {
     if (err.code === "permission-denied") {
       window.dispatchEvent(new CustomEvent("taskflow_firestore_permission_denied"));
     }
+    return [];
   }
-
-  // Fallback to localStore
-  return localStore.getActivities(projectId).slice(0, maxItems);
 };

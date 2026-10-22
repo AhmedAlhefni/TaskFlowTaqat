@@ -45,6 +45,40 @@ export const localStore = {
     }
   },
 
+  /** Remove this user's cached project data when a server snapshot revokes access. */
+  reconcileProjectsForUser(userId: string, authorizedProjects: Project[]): void {
+    try {
+      const rawProjects = localStorage.getItem(PROJECTS_KEY);
+      const cachedProjects: Project[] = rawProjects ? JSON.parse(rawProjects) : [];
+      const indexKey = `taskflow_cached_projects_${userId}`;
+      const rawKnownIds = localStorage.getItem(indexKey);
+      const knownIds: string[] = rawKnownIds ? JSON.parse(rawKnownIds) : [];
+      const authorizedIds = new Set(authorizedProjects.map((project) => project.id));
+      const revokedIds = new Set(knownIds.filter((projectId) => !authorizedIds.has(projectId)));
+
+      cachedProjects.forEach((project) => {
+        const wasAssociatedWithUser = project.ownerId === userId || project.memberIds?.includes(userId);
+        if (wasAssociatedWithUser && !authorizedIds.has(project.id)) revokedIds.add(project.id);
+      });
+
+      if (revokedIds.size > 0) {
+        localStorage.setItem(
+          PROJECTS_KEY,
+          JSON.stringify(cachedProjects.filter((project) => !revokedIds.has(project.id)))
+        );
+        revokedIds.forEach((projectId) => {
+          this.deleteProjectTasks(projectId);
+          this.deleteProjectActivities(projectId);
+        });
+      }
+
+      localStorage.setItem(indexKey, JSON.stringify([...authorizedIds]));
+      window.dispatchEvent(new CustomEvent("taskflow_local_projects_change"));
+    } catch (error) {
+      console.warn("Error reconciling cached projects:", error);
+    }
+  },
+
   deleteProject(projectId: string): void {
     try {
       const raw = localStorage.getItem(PROJECTS_KEY);

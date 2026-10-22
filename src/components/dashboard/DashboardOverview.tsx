@@ -26,10 +26,13 @@ import {
   ExternalLink,
   LayoutGrid,
 } from "lucide-react";
-import { Project, Task, UserProfile, TaskStatus } from "@/src/types";
+import { Project, Task, UserProfile } from "@/src/types";
 import { isTaskOverdue, formatDate } from "@/src/lib/dateUtils";
 import { useLanguage } from "@/src/context/LanguageContext";
 import { ProjectCard } from "@/src/components/projects/ProjectCard";
+import { useDashboardData } from "@/src/hooks/useDashboardData";
+import type { DashboardTaskFilter } from "@/src/hooks/useDashboardData";
+import { DashboardTaskFeed } from "@/src/components/dashboard/DashboardTaskFeed";
 
 interface DashboardOverviewProps {
   projects: Project[];
@@ -56,15 +59,11 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
 }) => {
   const { t, direction, language } = useLanguage();
 
-  // Role categorization
-  const ownedProjects = projects.filter((p) => p.ownerId === currentUser.uid);
-  const memberOnlyProjects = projects.filter((p) => p.ownerId !== currentUser.uid);
-
   // Role filter for projects grid
   const [projectRoleFilter, setProjectRoleFilter] = useState<"all" | "owned" | "member">("all");
 
   // Interactive Task filtering state on the dashboard
-  const [taskFilter, setTaskFilter] = useState<"all" | "my" | "in_progress" | "done" | "todo" | "overdue">(initialTaskFilter);
+  const [taskFilter, setTaskFilter] = useState<DashboardTaskFilter>(initialTaskFilter);
   const [taskSearch, setTaskSearch] = useState<string>("");
 
   useEffect(() => {
@@ -79,79 +78,14 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     }
   }, [initialTaskFilter]);
 
-  // Filtered projects
-  const visibleProjects = projects.filter((p) => {
-    if (projectRoleFilter === "owned") return p.ownerId === currentUser.uid;
-    if (projectRoleFilter === "member") return p.ownerId !== currentUser.uid;
-    return true;
-  });
-
-  // Aggregate all tasks across active projects only
-  const activeProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
-  const allTasks: Task[] = useMemo(() => {
-    if (projects.length === 0) return [];
-    return Object.entries(allTasksMap)
-      .filter(([pId]) => activeProjectIds.has(pId))
-      .flatMap(([, tasks]) => tasks);
-  }, [allTasksMap, activeProjectIds, projects.length]);
-
   const totalProjects = projects.length;
-  const totalTasks = allTasks.length;
-  const todoTasks = allTasks.filter((t) => t.status === "todo");
-  const inProgressTasks = allTasks.filter((t) => t.status === "in_progress");
-  const doneTasks = allTasks.filter((t) => t.status === "done");
-  const overdueTasks = allTasks.filter((t) => isTaskOverdue(t));
-
-  // Priorities
-  const highPriorityTasks = allTasks.filter((t) => t.priority === "high");
-  const mediumPriorityTasks = allTasks.filter((t) => t.priority === "medium");
-  const lowPriorityTasks = allTasks.filter((t) => t.priority === "low");
-
-  // My Tasks
-  const myAssignedTasks = allTasks.filter((t) => t.assigneeId === currentUser.uid);
-  const myPendingTasks = myAssignedTasks.filter((t) => t.status !== "done");
-
-  const overallProgress = totalTasks > 0 ? Math.round((doneTasks.length / totalTasks) * 100) : 0;
-  const inProgressPercent = totalTasks > 0 ? Math.round((inProgressTasks.length / totalTasks) * 100) : 0;
-  const todoPercent = totalTasks > 0 ? Math.max(0, 100 - overallProgress - inProgressPercent) : 0;
-
-  // Map project ID to Project object
-  const projectMap = useMemo(() => {
-    const map = new Map<string, Project>();
-    projects.forEach((p) => map.set(p.id, p));
-    return map;
-  }, [projects]);
-
-  // Filtered tasks for the interactive task explorer section
-  const displayTasks = useMemo(() => {
-    return allTasks.filter((task) => {
-      // Search query
-      if (taskSearch.trim() !== "") {
-        const q = taskSearch.toLowerCase();
-        const matchesTitle = task.title.toLowerCase().includes(q);
-        const matchesDesc = (task.description || "").toLowerCase().includes(q);
-        if (!matchesTitle && !matchesDesc) return false;
-      }
-
-      // Quick filter
-      if (taskFilter === "my") {
-        return task.assigneeId === currentUser.uid;
-      }
-      if (taskFilter === "in_progress") {
-        return task.status === "in_progress";
-      }
-      if (taskFilter === "done") {
-        return task.status === "done";
-      }
-      if (taskFilter === "todo") {
-        return task.status === "todo";
-      }
-      if (taskFilter === "overdue") {
-        return isTaskOverdue(task);
-      }
-      return true;
-    });
-  }, [allTasks, taskFilter, taskSearch, currentUser.uid]);
+  const {
+    ownedProjects, memberOnlyProjects, visibleProjects, totalTasks,
+    todoTasks, inProgressTasks, doneTasks, overdueTasks,
+    highPriorityTasks, mediumPriorityTasks, lowPriorityTasks,
+    myAssignedTasks, myPendingTasks, overallProgress, inProgressPercent,
+    todoPercent, projectMap, displayTasks,
+  } = useDashboardData(projects, allTasksMap, currentUser.uid, taskFilter, taskSearch, projectRoleFilter);
 
   // Contextual summary for welcome banner
   const contextualSummary = useMemo(() => {
@@ -957,127 +891,15 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
         </div>
       </div>
 
-      {/* 5. Interactive Tasks Feed (Filtered in Real Time by Cards or Filter Chips) */}
-      <div id="interactive-tasks-section" className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-violet-50 dark:bg-violet-950/60 text-violet-600 dark:text-violet-400 flex items-center justify-center">
-              <CheckSquare className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                {taskFilter === "my"
-                  ? t("myTasksTitle")
-                  : taskFilter === "in_progress"
-                  ? (language === "ar" ? "المهام الجارية قيد التنفيذ" : "In Progress Tasks")
-                  : taskFilter === "done"
-                  ? (language === "ar" ? "المهام المكتملة بنجاح" : "Completed Tasks")
-                  : taskFilter === "todo"
-                  ? (language === "ar" ? "المهام بانتظار البدء" : "To Do Tasks")
-                  : taskFilter === "overdue"
-                  ? (language === "ar" ? "المهام المتأخرة عن موعدها" : "Overdue Tasks")
-                  : (language === "ar" ? "أحدث المهام في مساحات العمل" : "Workspace Tasks Feed")}
-              </h3>
-              <p className="text-xs text-slate-400">
-                {language === "ar"
-                  ? `عرض ${displayTasks.length} مهمة مطابقة للفلتر المحدد`
-                  : `Showing ${displayTasks.length} tasks matching current active filter`}
-              </p>
-            </div>
-          </div>
-
-          <button
-            onClick={onNavigateToMyTasks}
-            className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
-          >
-            <span>{language === "ar" ? "إدارة كل مهامي" : "Manage all my tasks"}</span>
-            {direction === "rtl" ? <ArrowLeft className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
-          </button>
-        </div>
-
-        {displayTasks.length === 0 ? (
-          <div className="p-8 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
-            <CheckSquare className="w-8 h-8 text-slate-400 mx-auto mb-2 opacity-50" />
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              {language === "ar" ? "لا توجد مهام مطابقة للفلتر المحدد حالياً." : "No tasks match the active filter criteria."}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            {displayTasks.slice(0, 6).map((task) => {
-              const overdue = isTaskOverdue(task);
-              const parentProject = projectMap.get(task.projectId);
-
-              return (
-                <div
-                  key={task.id}
-                  className="p-3.5 rounded-2xl border border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-800/30 hover:border-indigo-400 dark:hover:border-indigo-600 transition-all flex items-center justify-between gap-3"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span
-                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                        task.status === "done"
-                          ? "bg-emerald-500"
-                          : task.status === "in_progress"
-                          ? "bg-blue-500"
-                          : "bg-slate-400"
-                      }`}
-                    />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs font-bold truncate ${task.status === "done" ? "line-through text-slate-400" : "text-slate-900 dark:text-white"}`}>
-                          {task.title}
-                        </span>
-                        {overdue && (
-                          <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-rose-600 text-white shrink-0">
-                            {language === "ar" ? "متأخرة" : "Overdue"}
-                          </span>
-                        )}
-                        {task.assigneeId === currentUser.uid && (
-                          <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-violet-100 dark:bg-violet-950 text-violet-700 dark:text-violet-300 shrink-0">
-                            {language === "ar" ? "معينة لك" : "Assigned to you"}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                        {parentProject && (
-                          <span className="font-semibold text-slate-600 dark:text-slate-300">{parentProject.name}</span>
-                        )}
-                        {task.dueDate && <span>• {formatDate(task.dueDate, language)}</span>}
-                        {task.assigneeName && <span>• {task.assigneeName}</span>}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span
-                      className={`text-[9px] font-bold px-2 py-0.5 rounded-md border ${
-                        task.priority === "high"
-                          ? "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-900"
-                          : task.priority === "medium"
-                          ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-900"
-                          : "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
-                      }`}
-                    >
-                      {t(task.priority)}
-                    </span>
-                    {parentProject && (
-                      <button
-                        onClick={() => onOpenProject(parentProject)}
-                        className="p-1 rounded-lg text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer"
-                        title={t("openInProject")}
-                      >
-                        {direction === "rtl" ? <ArrowLeft className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
+      <DashboardTaskFeed
+        taskFilter={taskFilter}
+        displayTasks={displayTasks}
+        myAssignedTasks={myAssignedTasks}
+        projectMap={projectMap}
+        currentUser={currentUser}
+        onNavigateToMyTasks={onNavigateToMyTasks}
+        onOpenProject={onOpenProject}
+      />
       {/* 6. Active Workspaces Grid Section with Role Filters */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">

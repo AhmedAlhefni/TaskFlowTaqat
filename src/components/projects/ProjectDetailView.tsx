@@ -24,7 +24,7 @@ import {
   UserProfile,
   Activity,
 } from "@/src/types";
-import { isTaskOverdue } from "@/src/lib/dateUtils";
+import { useProjectTaskFilters } from "@/src/hooks/useProjectTaskFilters";
 import { useLanguage } from "@/src/context/LanguageContext";
 import { useToast } from "@/src/components/common/Toast";
 import { KanbanBoard } from "@/src/components/tasks/KanbanBoard";
@@ -155,65 +155,7 @@ export const ProjectDetailView: React.FC<ProjectDetailViewProps> = ({
     return list;
   }, [project, currentUser]);
 
-  // Apply Search, Filters, and Sorting
-  const filteredTasks = useMemo(() => {
-    return projectTasks
-      .filter((task) => {
-        // Search by title keyword client-side
-        if (filters.searchQuery.trim() !== "") {
-          const q = filters.searchQuery.toLowerCase();
-          const matchesTitle = task.title.toLowerCase().includes(q);
-          const matchesDesc = (task.description || "").toLowerCase().includes(q);
-          if (!matchesTitle && !matchesDesc) return false;
-        }
-
-        // Status
-        if (filters.status !== "all" && task.status !== filters.status) {
-          return false;
-        }
-
-        // Priority
-        if (filters.priority !== "all" && task.priority !== filters.priority) {
-          return false;
-        }
-
-        // Assignee
-        if (filters.assigneeId === "unassigned") {
-          if (task.assigneeId !== null) return false;
-        } else if (filters.assigneeId !== "all") {
-          if (task.assigneeId !== filters.assigneeId) return false;
-        }
-
-        // Overdue (Incomplete task with dueDate before today)
-        if (filters.isOverdueOnly && !isTaskOverdue(task)) {
-          return false;
-        }
-
-        return true;
-      })
-      .sort((a, b) => {
-        if (filters.sortBy === "dueDate_asc") {
-          if (!a.dueDate) return 1;
-          if (!b.dueDate) return -1;
-          return a.dueDate.localeCompare(b.dueDate);
-        }
-        if (filters.sortBy === "dueDate_desc") {
-          if (!a.dueDate) return 1;
-          if (!b.dueDate) return -1;
-          return b.dueDate.localeCompare(a.dueDate);
-        }
-        if (filters.sortBy === "priority_desc") {
-          const weights = { high: 3, medium: 2, low: 1 };
-          return weights[b.priority] - weights[a.priority];
-        }
-        if (filters.sortBy === "priority_asc") {
-          const weights = { high: 3, medium: 2, low: 1 };
-          return weights[a.priority] - weights[b.priority];
-        }
-        // created_desc default
-        return 0;
-      });
-  }, [projectTasks, filters]);
+  const filteredTasks = useProjectTaskFilters(projectTasks, filters);
 
   // Task Handlers
   const handleCreateOrUpdateTask = async (data: {

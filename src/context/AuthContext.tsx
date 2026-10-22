@@ -72,30 +72,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             createdAt: serverTimestamp() as any,
             updatedAt: serverTimestamp() as any,
           };
-          setDoc(userRef, newProfile).catch(() => {});
+          await setDoc(userRef, newProfile);
           if (email) {
             const lookupRef = doc(db, "user_lookups", email);
-            setDoc(lookupRef, {
+            await setDoc(lookupRef, {
               uid: user.uid,
               email,
               displayName,
-            }, { merge: true }).catch(() => {});
+            }, { merge: true });
           }
           return newProfile;
         } else {
           const data = snap.data() as UserProfile;
           if (user.displayName && data.displayName !== user.displayName) {
-            setDoc(userRef, { displayName: user.displayName, updatedAt: serverTimestamp() }, { merge: true }).catch(() => {});
+            await setDoc(userRef, { displayName: user.displayName, updatedAt: serverTimestamp() }, { merge: true });
             data.displayName = user.displayName;
           }
 
           if (email) {
             const lookupRef = doc(db, "user_lookups", email);
-            setDoc(lookupRef, {
+            await setDoc(lookupRef, {
               uid: user.uid,
               email,
               displayName,
-            }, { merge: true }).catch(() => {});
+            }, { merge: true });
           }
 
           return data;

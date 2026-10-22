@@ -16,61 +16,64 @@ import { logActivity } from "@/src/services/activityService";
 import { localStore } from "@/src/services/localStore";
 
 /**
- * Real-time listener for all tasks in a project.
- * Uses local store fallback if Firestore rules reject queries.
+ * Real-time listener for tasks in a project after access has been confirmed.
  */
 export const subscribeProjectTasks = (
   projectId: string,
   onTasksUpdated: (tasks: Task[]) => void,
   onError?: (err: any) => void
 ) => {
-  // 1. Immediately emit cached local tasks for instant 0ms rendering
-  const initialLocal = localStore.getTasks(projectId);
-  if (initialLocal && initialLocal.length > 0) {
-    onTasksUpdated(initialLocal);
-  }
-
+  // Do not display cached task data until Firestore confirms the project access.
+  onTasksUpdated([]);
+  let serverConfirmedAccess = false;
+  const localEvent = `taskflow_local_tasks_${projectId}`;
   const handleLocalChange = () => {
-    const localTasks = localStore.getTasks(projectId);
-    onTasksUpdated(localTasks);
+    if (serverConfirmedAccess) onTasksUpdated(localStore.getTasks(projectId));
   };
-
-  const eventName = `taskflow_local_tasks_${projectId}`;
-  window.addEventListener(eventName, handleLocalChange);
+  window.addEventListener(localEvent, handleLocalChange);
 
   try {
     const tasksRef = collection(db, "projects", projectId, "tasks");
 
     const unsubscribe = onSnapshot(
       tasksRef,
+      { includeMetadataChanges: true },
       (snapshot) => {
+        if (snapshot.metadata.fromCache) {
+          serverConfirmedAccess = false;
+          onTasksUpdated([]);
+          return;
+        }
+
         const tasks: Task[] = snapshot.docs.map((docSnap) => ({
           id: docSnap.id,
           ...docSnap.data(),
         })) as Task[];
 
+        serverConfirmedAccess = true;
         localStore.saveProjectTasks(projectId, tasks);
         onTasksUpdated(tasks);
       },
       (err) => {
+        serverConfirmedAccess = false;
         if (err.code === "permission-denied") {
           window.dispatchEvent(new CustomEvent("taskflow_firestore_permission_denied"));
-          onTasksUpdated(localStore.getTasks(projectId));
-        } else {
-          onError?.(err);
         }
+        onTasksUpdated([]);
+        onError?.(err);
       }
     );
 
     return () => {
       unsubscribe();
-      window.removeEventListener(eventName, handleLocalChange);
+      window.removeEventListener(localEvent, handleLocalChange);
     };
-  } catch {
-    onTasksUpdated(localStore.getTasks(projectId));
-    return () => {
-      window.removeEventListener(eventName, handleLocalChange);
-    };
+  } catch (error) {
+    serverConfirmedAccess = false;
+    window.removeEventListener(localEvent, handleLocalChange);
+    onTasksUpdated([]);
+    onError?.(error);
+    return () => {};
   }
 };
 

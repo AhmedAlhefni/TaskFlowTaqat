@@ -8,7 +8,7 @@ Built to exceed the **TAQAT / CodeMap Technical Assessment SRS Specification (Ve
 
 ## 🚀 Live Deployment & Demo Access
 
-- **Public Shared Application URL**:  
+- **Public Shared Application URL**: [https://taskflowtaqat.web.app](https://taskflowtaqat.web.app)
 
 
 ### 🔑 Pre-Configured Test Accounts (One-Click or Manual)
@@ -34,13 +34,14 @@ You can use the 1-click Quick Demo buttons on the Login screen, or enter credent
 
 ### 2. Project Management (CRUD & Ownership)
 - **Create Project**: Name (3–80 characters) and description (up to 1,000 characters). Creator becomes owner and initial member.
-- **Strict Firestore Persistence Guarantee**: Writes are committed to Firestore before confirming success; any security rule refusal or network error is immediately surfaced with clear feedback.
+- **Firestore Persistence and Offline Behavior**: Create and delete operations require Firestore confirmation. Project and task edits have a local-only fallback for offline transaction failures and show a warning; there is no queued background sync, so those local edits are not guaranteed to reach Firestore.
 - **Project Settings (Owner Only)**:
   - Edit project title and description.
-  - **Membership Management**: Add registered users by exact email lookup from `users` collection.
+  - **Membership Management**: Add registered users through a narrowly scoped exact-email lookup in `user_lookups`.
   - **Remove Member**: Automatically unassigns any tasks currently assigned to the removed member, preserving audit history.
   - Owner cannot remove themselves from their own project.
-- **Safe Cascade Deletion**: Removes all sub-collection tasks (`projects/{projectId}/tasks`) and activity history (`projects/{projectId}/activities`) atomically before removing the parent project document.
+- **Retryable Cascade Deletion**: Removes sub-collection tasks and activity history in batches before deleting the parent project. Each batch is atomic, but the full cascade spans multiple batches; if a batch fails, the project remains and the owner can retry to remove the remaining children.
+- **Revoked Membership Cache Handling**: Project and task data are shown only after Firestore confirms current access. Cached project/task/activity data is cleared when a server-confirmed project list shows that membership was revoked. If access cannot be confirmed, cached workspace data stays hidden.
 
 ### 3. Task Management & Rigorous Authorization Matrix
 - **Task Creation**: Title (3–120 characters), description (up to 1,000 chars), priority (`low`, `medium`, `high`), status (`todo`, `in_progress`, `done`), due date, and member assignment. Available to all active project members.
@@ -94,20 +95,21 @@ You can use the 1-click Quick Demo buttons on the Login screen, or enter credent
 
 ## 🛠️ Technology Stack & Architecture
 
-- **Frontend**: React 19, TypeScript (Strict Mode), Vite 8.
+- **Frontend**: React 19, TypeScript, Vite 8. This differs from the SRS requirement for Next.js App Router and remains a known technical deviation.
 - **Styling**: Tailwind CSS v4, Lucide Icons, fully responsive layout (375px mobile to 4K desktop).
 - **Backend & Database**: Firebase Authentication, Cloud Firestore with real-time WebSocket listeners (`onSnapshot`).
 - **Data Integrity**: Optimistic Concurrency Control with atomic `version` increments on projects and tasks (`runTransaction`).
-- **Automated Testing**: Vitest test suite with 43 passing tests across 7 test suites covering permissions, concurrency, cascade deletion, validation, error mapping, and Firestore security rules.
+- **Routing**: Path-based navigation is coordinated by a dedicated hook, including direct links, refresh, back/forward history, and login redirects. Firebase Hosting rewrites app paths to `index.html`.
+- **Automated Testing**: Vitest suites cover permissions, concurrency, cascade deletion, validation, error mapping, activity history, and Firestore security rules. The test suite was not rerun during this documentation and code review update; rerun it before treating results as verified for the current revision.
 
 ---
 
 ## 🔒 Security Architecture (`firestore.rules`)
 
 1. **User Profiles (`/users/{uid}`)**:
-   - Authenticated users can read minimal profile for member lookup.
-   - Users can only create or update their own profile document (`request.auth.uid == uid`).
+   - Users can read, create, and update only their own profile document (`request.auth.uid == uid`).
    - Profile documents cannot be deleted.
+   - Member search uses the separate `user_lookups/{normalizedEmail}` document; arbitrary listing of profiles is denied.
 
 2. **Projects (`/projects/{projectId}`)**:
    - Only verified project members or the owner can read project data.
@@ -160,7 +162,7 @@ npm test
 | **TC-06** | Create a project | Saved to Firestore, visible in dashboard | ✅ Pass |
 | **TC-07** | Update project as member | Rejected; settings restricted to Owner | ✅ Pass |
 | **TC-08** | Access foreign project | Access denied; only members can view | ✅ Pass |
-| **TC-09** | Delete project with tasks | Atomically removes project, tasks, and activities | ✅ Pass |
+| **TC-09** | Delete project with tasks | Removes project, tasks, and activities in retryable batches; the entire cascade is not one atomic operation | ✅ Pass |
 | **TC-11** | Add existing registered user | Added to project members and sees project | ✅ Pass |
 | **TC-12** | Add duplicate member | Prevented with clear user alert | ✅ Pass |
 | **TC-13** | Add unregistered email | Rejected with "User not found" error | ✅ Pass |
@@ -179,3 +181,5 @@ npm test
 | **TC-39** | Switch to Arabic | Full RTL layout, Cairo typography, Arabic copy | ✅ Pass |
 | **TC-40** | Switch to English | Full LTR layout, Inter typography, English copy | ✅ Pass |
 | **TC-41** | Switch theme & reload | Dark / Light preference persists | ✅ Pass |
+
+> The checklist statuses above are existing project-reported results. They were not reverified against the current revision during this update.

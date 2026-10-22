@@ -11,11 +11,31 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == uid;
     }
 
+    function hasValidProjectFields(data) {
+      return data.name is string && data.name.size() >= 3 && data.name.size() <= 80 &&
+        (!data.keys().hasAny(['description']) ||
+          (data.description is string && data.description.size() <= 1000)) &&
+        data.ownerId is string && data.memberIds is list &&
+        data.memberIds.hasAny([data.ownerId]);
+    }
+
+    function hasValidTaskFields(data) {
+      return data.title is string && data.title.size() >= 3 && data.title.size() <= 120 &&
+        (!data.keys().hasAny(['description']) ||
+          (data.description is string && data.description.size() <= 1000)) &&
+        data.status in ['todo', 'in_progress', 'done'] &&
+        data.priority in ['low', 'medium', 'high'] &&
+        (!data.keys().hasAny(['assigneeId']) || data.assigneeId == null ||
+          data.assigneeId == '' || data.assigneeId is string) &&
+        (!data.keys().hasAny(['dueDate']) || data.dueDate == null ||
+          (data.dueDate is string && data.dueDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')));
+    }
+
     // 1. User Profiles Collection:
     // Strictly private to each individual user (Zero leak, Zero enumeration).
     // Direct get & list are completely forbidden to any other user.
     match /users/{uid} {
-      allow read, write: if isUser(uid);
+      allow read, create, update: if isUser(uid);
       allow delete: if false;
     }
 
@@ -43,12 +63,14 @@ service cloud.firestore {
 
       // Create: Authenticated user must set themselves as owner & in memberIds
       allow create: if isAuthenticated() &&
+        hasValidProjectFields(request.resource.data) &&
         request.resource.data.ownerId == request.auth.uid &&
         request.resource.data.memberIds.hasAny([request.auth.uid]);
 
       // Update: Owner only; ownerId is immutable; only allowed project fields can be updated
       allow update: if isAuthenticated() &&
         resource.data.ownerId == request.auth.uid &&
+        hasValidProjectFields(request.resource.data) &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name', 'description', 'memberIds', 'members', 'updatedAt', 'version'
@@ -92,6 +114,7 @@ service cloud.firestore {
 
         // Create: Project member or owner, createdBy must be current user, projectId must match parent, assignee must be in project
         allow create: if isParentProjectMember() &&
+          hasValidTaskFields(request.resource.data) &&
           request.resource.data.createdBy == request.auth.uid &&
           request.resource.data.projectId == projectId &&
           isValidAssignee(request.resource.data.assigneeId);
@@ -109,6 +132,7 @@ service cloud.firestore {
         //    CANNOT update: status (only Owner or Assignee can advance status!), createdBy, projectId.
         allow update: if (
           isParentProjectOwner() &&
+          hasValidTaskFields(request.resource.data) &&
           hasImmutableTaskFields() &&
           isValidAssignee(request.resource.data.assigneeId) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -117,6 +141,7 @@ service cloud.firestore {
         ) || (
           isParentProjectMember() &&
           resource.data.assigneeId == request.auth.uid &&
+          hasValidTaskFields(request.resource.data) &&
           hasImmutableTaskFields() &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'title', 'description', 'status', 'priority', 'dueDate', 'updatedAt', 'version'
@@ -124,6 +149,7 @@ service cloud.firestore {
         ) || (
           isParentProjectMember() &&
           resource.data.createdBy == request.auth.uid &&
+          hasValidTaskFields(request.resource.data) &&
           hasImmutableTaskFields() &&
           isValidAssignee(request.resource.data.assigneeId) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([

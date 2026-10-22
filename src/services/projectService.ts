@@ -14,7 +14,6 @@ import {
   onSnapshot,
   arrayUnion,
   arrayRemove,
-  limit,
 } from "firebase/firestore";
 import { db } from "@/src/lib/firebase";
 import { Project, UserProfile } from "@/src/types";
@@ -22,32 +21,28 @@ import { logActivity } from "@/src/services/activityService";
 import { localStore } from "@/src/services/localStore";
 
 /**
- * Real-time subscription to all projects where the user is an owner or member.
- * Falls back seamlessly to local store if Firestore rules are not deployed yet.
+ * Real-time subscription to projects where Firestore confirms current membership.
  */
 export const subscribeUserProjects = (
   userId: string,
-  onProjectsUpdated: (projects: Project[]) => void,
+  onProjectsUpdated: (projects: Project[], serverConfirmed?: boolean) => void,
   onError?: (err: any) => void
 ) => {
-  let isUsingLocalFallback = false;
-
-  const handleLocalChange = () => {
-    if (isUsingLocalFallback) {
-      const local = localStore.getProjects(userId);
-      onProjectsUpdated(local);
-    }
-  };
-
-  window.addEventListener("taskflow_local_projects_change", handleLocalChange);
-
   try {
     const projectsRef = collection(db, "projects");
     const q = query(projectsRef, where("memberIds", "array-contains", userId));
 
     const unsubscribe = onSnapshot(
       q,
+      { includeMetadataChanges: true },
       (snapshot) => {
+        // Cached membership can be stale after an owner removes this user.
+        // Fail closed until Firestore confirms the current membership list.
+        if (snapshot.metadata.fromCache) {
+          onProjectsUpdated([], false);
+          return;
+        }
+
         const projects: Project[] = snapshot.docs.map((docSnap) => ({
           id: docSnap.id,
           ...docSnap.data(),
@@ -59,34 +54,24 @@ export const subscribeUserProjects = (
           return timeB - timeA;
         });
 
-        // Also sync to local cache
+        localStore.reconcileProjectsForUser(userId, projects);
         projects.forEach((p) => localStore.saveProject(p));
-
-        onProjectsUpdated(projects);
+        onProjectsUpdated(projects, true);
       },
       (err) => {
         if (err.code === "permission-denied") {
           window.dispatchEvent(new CustomEvent("taskflow_firestore_permission_denied"));
-          isUsingLocalFallback = true;
-          // Serve from local fallback immediately
-          const local = localStore.getProjects(userId);
-          onProjectsUpdated(local);
-        } else {
-          onError?.(err);
         }
+        onProjectsUpdated([], false);
+        onError?.(err);
       }
     );
 
-    return () => {
-      unsubscribe();
-      window.removeEventListener("taskflow_local_projects_change", handleLocalChange);
-    };
-  } catch {
-    isUsingLocalFallback = true;
-    onProjectsUpdated(localStore.getProjects(userId));
-    return () => {
-      window.removeEventListener("taskflow_local_projects_change", handleLocalChange);
-    };
+    return unsubscribe;
+  } catch (error) {
+    onProjectsUpdated([], false);
+    onError?.(error);
+    return () => {};
   }
 };
 
@@ -307,8 +292,8 @@ export const updateProject = async (
 };
 
 /**
- * Delete project and safely cascade clean up child tasks and activities (Owner only).
- * Uses batch chunking (max 400 writes per batch) to avoid Firestore limits.
+ * Delete a project and its children in retryable chunks (Owner only).
+ * Firestore batches are individually atomic, not atomic across every chunk.
  */
 export const deleteProject = async (
   projectId: string,
@@ -321,7 +306,8 @@ export const deleteProject = async (
     throw new Error("Unauthorized: Only the project owner can delete this project");
   }
 
-  // 1. Try Firestore cascade cleanup
+  // Delete children first, then the parent. If a later batch fails, the
+  // project remains and a retry cleans up the remaining children.
   try {
     const tasksRef = collection(db, "projects", projectId, "tasks");
     const taskSnap = await getDocs(tasksRef);
@@ -345,11 +331,9 @@ export const deleteProject = async (
   } catch (err: any) {
     if (err.code === "permission-denied") {
       window.dispatchEvent(new CustomEvent("taskflow_firestore_permission_denied"));
-      throw new Error("فشل الحذف: ليس لديك صلاحية حذف هذا المشروع من السحابة (Permission Denied).");
+      throw new Error("تعذر إكمال حذف المشروع بسبب صلاحيات Firestore. قد تحتاج إعادة المحاولة بعد مراجعة القواعد.");
     }
-    if (err.message && !err.message.includes("not found")) {
-      throw new Error(`فشل حذف المشروع من السحابة: ${err.message || "تعذر الاتصال بـ Firestore السحابي. لم يتم حذف المشروع."}`);
-    }
+    throw new Error(`لم يكتمل حذف المشروع. قد يكون بعض محتوى المشروع قد حُذف، لكن المشروع بقي موجودًا. أعد المحاولة لإكمال التنظيف. (${err.message || "تعذر الاتصال بـ Firestore"})`);
   }
 
   // 2. Cascade delete from local store ONLY after remote deletion succeeds
@@ -389,98 +373,28 @@ export const addProjectMember = async (
 
   let targetUser: UserProfile | null = null;
 
-  // 1. Direct document lookup by exact email in user_lookups collection
+  // Only a registered-user lookup document is an eligible invitation target.
   try {
     const lookupRef = doc(db, "user_lookups", normalizedEmail);
     const lookupSnap = await getDoc(lookupRef);
-    if (lookupSnap?.exists && lookupSnap.exists()) {
-      targetUser = lookupSnap.data() as UserProfile;
-    } else if (memberEmail.trim() !== normalizedEmail) {
-      const origLookupRef = doc(db, "user_lookups", memberEmail.trim());
-      const origSnap = await getDoc(origLookupRef);
-      if (origSnap?.exists && origSnap.exists()) {
-        targetUser = origSnap.data() as UserProfile;
+    if (lookupSnap?.exists?.()) {
+      const data = lookupSnap.data();
+      if (data.email?.toLowerCase().trim() === normalizedEmail && typeof data.uid === "string") {
+        targetUser = {
+          uid: data.uid,
+          email: normalizedEmail,
+          displayName: typeof data.displayName === "string" ? data.displayName : normalizedEmail.split("@")[0],
+        } as UserProfile;
       }
     }
   } catch (err: any) {
-    console.warn("Firestore user lookup error in user_lookups:", err);
     if (err.code === "permission-denied") {
       window.dispatchEvent(new CustomEvent("taskflow_firestore_permission_denied"));
+      throw new Error("تعذر التحقق من العضو بسبب قواعد Firestore.");
     }
+    throw new Error(`تعذر التحقق من الحساب في Firestore: ${err.message || "خطأ غير معروف"}`);
   }
 
-  // 2. Fallback: Query registered users collection by email (covers all existing accounts)
-  if (!targetUser) {
-    try {
-      const usersRef = collection(db, "users");
-      const q = query(usersRef, where("email", "==", normalizedEmail), limit(1));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const uDoc = snap.docs[0];
-        const uData = uDoc.data();
-        targetUser = {
-          uid: uData.uid || uDoc.id,
-          email: uData.email || normalizedEmail,
-          displayName: uData.displayName || normalizedEmail.split("@")[0],
-          photoURL: uData.photoURL || null,
-        } as UserProfile;
-      } else if (memberEmail.trim() !== normalizedEmail) {
-        const q2 = query(usersRef, where("email", "==", memberEmail.trim()), limit(1));
-        const snap2 = await getDocs(q2);
-        if (!snap2.empty) {
-          const uDoc = snap2.docs[0];
-          const uData = uDoc.data();
-          targetUser = {
-            uid: uData.uid || uDoc.id,
-            email: uData.email || memberEmail.trim(),
-            displayName: uData.displayName || memberEmail.trim().split("@")[0],
-            photoURL: uData.photoURL || null,
-          } as UserProfile;
-        }
-      }
-
-      // If found in users collection, immediately backfill user_lookups document
-      if (targetUser && targetUser.uid) {
-        setDoc(
-          doc(db, "user_lookups", normalizedEmail),
-          {
-            uid: targetUser.uid,
-            email: targetUser.email || normalizedEmail,
-            displayName: targetUser.displayName || normalizedEmail.split("@")[0],
-          },
-          { merge: true }
-        ).catch(() => {});
-      }
-    } catch (err: any) {
-      console.warn("Fallback query to users collection error:", err);
-    }
-  }
-
-  // 3. Fallback: Check existing projects across local cache / memory
-  if (!targetUser) {
-    const allLocalProjects = localStore.getProjects();
-    for (const p of allLocalProjects) {
-      if (p.members) {
-        for (const [mUid, mInfo] of Object.entries(p.members)) {
-          if (
-            mInfo?.email &&
-            (mInfo.email.toLowerCase().trim() === normalizedEmail ||
-              mInfo.email.trim() === memberEmail.trim())
-          ) {
-            targetUser = {
-              uid: mUid,
-              email: mInfo.email,
-              displayName: mInfo.displayName || mInfo.email.split("@")[0],
-            } as UserProfile;
-            break;
-          }
-        }
-      }
-      if (targetUser) break;
-    }
-  }
-
-  // Strictly require user to exist in Firestore registered users
   if (!targetUser) {
     throw new Error("userNotFound");
   }
@@ -573,35 +487,41 @@ export const removeProjectMember = async (
   };
 
   try {
+    // Unassign first and remove access last. A failure leaves the member in
+    // the project, so the owner can safely retry the remaining cleanup.
+    const tasksRef = collection(db, "projects", projectId, "tasks");
+    const assignedTasksQ = query(tasksRef, where("assigneeId", "==", memberUid));
+    const assignedSnap = await getDocs(assignedTasksQ);
+
+    if (!assignedSnap.empty) {
+      const assignedTasks = assignedSnap.docs;
+      const chunkSize = 400;
+      for (let start = 0; start < assignedTasks.length; start += chunkSize) {
+        const batch = writeBatch(db);
+        assignedTasks.slice(start, start + chunkSize).forEach((taskDoc) => {
+          batch.update(taskDoc.ref, {
+            assigneeId: null,
+            assigneeName: null,
+            assigneeEmail: null,
+            updatedAt: serverTimestamp(),
+          });
+        });
+        await batch.commit();
+      }
+    }
+
     const projectRef = doc(db, "projects", projectId);
     await updateDoc(projectRef, {
       memberIds: arrayRemove(memberUid),
       members: updatedMembers,
       updatedAt: serverTimestamp(),
     });
-
-    const tasksRef = collection(db, "projects", projectId, "tasks");
-    const assignedTasksQ = query(tasksRef, where("assigneeId", "==", memberUid));
-    const assignedSnap = await getDocs(assignedTasksQ);
-
-    if (!assignedSnap.empty) {
-      const batch = writeBatch(db);
-      assignedSnap.forEach((taskDoc) => {
-        batch.update(taskDoc.ref, {
-          assigneeId: null,
-          assigneeName: null,
-          assigneeEmail: null,
-          updatedAt: serverTimestamp(),
-        });
-      });
-      await batch.commit();
-    }
   } catch (err: any) {
     if (err.code === "permission-denied") {
       window.dispatchEvent(new CustomEvent("taskflow_firestore_permission_denied"));
-      throw new Error("فشل إزالة العضو: تم رفض التعديل بواسطة قواعد أمان Firestore (Permission Denied).");
+      throw new Error("تعذرت إزالة العضو. بقيت عضويته فعالة؛ أعد المحاولة بعد مراجعة قواعد Firestore.");
     }
-    throw new Error(`فشل إزالة العضو في السحابة: ${err.message || "تعذر الاتصال بـ Firestore السحابي"}`);
+    throw new Error(`تعذرت إزالة العضو بالكامل. بقيت عضويته فعالة، وقد تكون بعض مهامه أُلغيت. أعد المحاولة لإكمال العملية. (${err.message || "تعذر الاتصال بـ Firestore"})`);
   }
 
   // Update local store only after successful remote removal
