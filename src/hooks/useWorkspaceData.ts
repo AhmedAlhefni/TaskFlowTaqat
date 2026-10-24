@@ -4,6 +4,9 @@ import { subscribeUserProjects } from "@/src/services/projectService";
 import { subscribeProjectTasks } from "@/src/services/taskService";
 import { localStore } from "@/src/services/localStore";
 
+const EMPTY_PROJECTS: Project[] = [];
+const EMPTY_TASKS_MAP: Record<string, Task[]> = {};
+
 /** Loads server-confirmed projects and subscribes to tasks only for those projects. */
 export function useWorkspaceData(userId: string | null, authLoading: boolean) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -96,10 +99,10 @@ export function useWorkspaceData(userId: string | null, authLoading: boolean) {
 
   const accessConfirmed = Boolean(userId && confirmedUserId === userId);
   return {
-    projects: accessConfirmed ? projects : [],
+    projects: accessConfirmed ? projects : EMPTY_PROJECTS,
     projectsLoaded: accessConfirmed ? projectsLoaded : failedUserId === userId,
     loadFailed: Boolean(userId && failedUserId === userId),
-    allTasksMap: accessConfirmed ? allTasksMap : {},
+    allTasksMap: accessConfirmed ? allTasksMap : EMPTY_TASKS_MAP,
     setAllTasksMap,
   };
 }

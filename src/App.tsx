@@ -30,6 +30,8 @@ import { getProjectActivities } from "@/src/services/activityService";
 import { FirestoreRulesBanner } from "@/src/components/common/FirestoreRulesBanner";
 import { NotFoundPage } from "@/src/components/common/NotFoundPage";
 
+const EMPTY_TASKS: Task[] = [];
+
 function MainApp() {
   const { currentUser, userProfile, loading } = useAuth();
   const { t, language } = useLanguage();
@@ -49,6 +51,7 @@ function MainApp() {
 
   // Modals state
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(initialRoute.createProject);
+  const [projectModalNotice, setProjectModalNotice] = useState<string | null>(null);
   const [isGlobalCreateTaskOpen, setIsGlobalCreateTaskOpen] = useState(false);
   const [onboardingProject, setOnboardingProject] = useState<Project | null>(null);
   const [settingsProject, setSettingsProject] = useState<Project | null>(null);
@@ -113,9 +116,11 @@ function MainApp() {
   };
 
   useEffect(() => {
-    setCurrentProjectActivities([]);
-    const hasProjectAccess = Boolean(currentUser && projects.some((project) => project.id === selectedProjectId));
-    if (!selectedProjectId || !hasProjectAccess) return;
+    const hasProjectAccess = Boolean(currentUser && selectedProjectId && projects.some((project) => project.id === selectedProjectId));
+    if (!selectedProjectId || !hasProjectAccess) {
+      setCurrentProjectActivities((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
 
     let isCurrentProject = true;
     getProjectActivities(selectedProjectId)
@@ -127,7 +132,7 @@ function MainApp() {
     return () => {
       isCurrentProject = false;
     };
-  }, [selectedProjectId, currentUser, projects]);
+  }, [selectedProjectId, currentUser?.uid, projects]);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || null;
 
@@ -256,7 +261,10 @@ function MainApp() {
             }
           }}
           onSelectProject={handleOpenProject}
-          onCreateProject={() => setIsCreateProjectModalOpen(true)}
+          onCreateProject={() => {
+            setProjectModalNotice(null);
+            setIsCreateProjectModalOpen(true);
+          }}
           onSelectOverdueTasks={() => {
             setCurrentView("dashboard");
             setSelectedProjectId(null);
@@ -282,13 +290,17 @@ function MainApp() {
           onSelectProject={handleOpenProject}
           onCreateTask={() => {
             if (projects.length === 0) {
+              setProjectModalNotice(t("noEligibleProjects"));
               showToast(t("noEligibleProjects"), "info");
               setIsCreateProjectModalOpen(true);
             } else {
               setIsGlobalCreateTaskOpen(true);
             }
           }}
-          onCreateProject={() => setIsCreateProjectModalOpen(true)}
+          onCreateProject={() => {
+            setProjectModalNotice(null);
+            setIsCreateProjectModalOpen(true);
+          }}
           onToggleSidebar={() => {
             if (window.innerWidth < 768) {
               setIsMobileSidebarOpen(!isMobileSidebarOpen);
@@ -336,7 +348,7 @@ function MainApp() {
           ) : currentView === "project-detail" ? selectedProject ? (
             <ProjectDetailView
               project={selectedProject}
-              tasks={allTasksMap[selectedProject.id] || []}
+              tasks={allTasksMap[selectedProject.id] || EMPTY_TASKS}
               activities={currentProjectActivities}
               currentUser={userProfile}
               onBackToDashboard={() => {
@@ -371,7 +383,10 @@ function MainApp() {
               allTasksMap={allTasksMap}
               currentUser={userProfile}
               onOpenProject={handleOpenProject}
-              onCreateProject={() => setIsCreateProjectModalOpen(true)}
+              onCreateProject={() => {
+                setProjectModalNotice(null);
+                setIsCreateProjectModalOpen(true);
+              }}
             />
           ) : currentView === "my-tasks" ? (
             <MyTasksView
@@ -387,9 +402,13 @@ function MainApp() {
               currentUser={userProfile}
               initialTaskFilter={dashboardTaskFilter}
               onOpenProject={handleOpenProject}
-              onCreateProject={() => setIsCreateProjectModalOpen(true)}
+              onCreateProject={() => {
+                setProjectModalNotice(null);
+                setIsCreateProjectModalOpen(true);
+              }}
               onCreateTaskGlobal={() => {
                 if (projects.length === 0) {
+                  setProjectModalNotice(t("noEligibleProjects"));
                   showToast(t("noEligibleProjects"), "info");
                   setIsCreateProjectModalOpen(true);
                 } else {
@@ -407,7 +426,11 @@ function MainApp() {
       {userProfile && (
         <ProjectModal
           isOpen={isCreateProjectModalOpen}
-          onClose={() => setIsCreateProjectModalOpen(false)}
+          noticeMessage={projectModalNotice}
+          onClose={() => {
+            setIsCreateProjectModalOpen(false);
+            setProjectModalNotice(null);
+          }}
           onSubmit={handleCreateProjectSubmit}
         />
       )}

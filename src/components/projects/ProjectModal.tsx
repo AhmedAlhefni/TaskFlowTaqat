@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { X, Folder, AlertCircle } from "lucide-react";
+import { X, Folder, AlertCircle, Info } from "lucide-react";
 import { Project } from "@/src/types";
 import { useLanguage } from "@/src/context/LanguageContext";
 import { createProjectSchema, ProjectFormData } from "@/src/lib/schemas";
@@ -12,6 +12,7 @@ interface ProjectModalProps {
   onClose: () => void;
   onSubmit: (data: { name: string; description: string }) => Promise<void>;
   project?: Project | null;
+  noticeMessage?: string | null;
 }
 
 export const ProjectModal: React.FC<ProjectModalProps> = ({
@@ -19,6 +20,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   onClose,
   onSubmit,
   project,
+  noticeMessage,
 }) => {
   const { t } = useLanguage();
 
@@ -107,6 +109,13 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {noticeMessage && (
+          <div className="mx-6 mt-5 p-3.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800/80 text-indigo-900 dark:text-indigo-200 text-xs font-semibold flex items-center gap-2.5 animate-in fade-in duration-150">
+            <Info className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span>{noticeMessage}</span>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit(onFormSubmit)} className="p-6 space-y-4">
           {errors.root && (

@@ -15,7 +15,7 @@ export interface AppRoute {
 export function readAppRoute(): AppRoute {
   try {
     const path = window.location.pathname.replace(/\/+$/, "") || "/";
-    if (path === "/") return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: null };
+    if (path === "/" || path === "/dashboard") return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: null };
     if (path === "/login") return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: "login" };
     if (path === "/register") return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: "register" };
     if (path === "/projects/new") return { view: "projects", projectId: null, createProject: true, settings: false, authMode: null };
@@ -40,6 +40,7 @@ export function readAppRoute(): AppRoute {
     }
     if (hash === "#/projects") return { view: "projects", projectId: null, createProject: false, settings: false, authMode: null };
     if (hash === "#/my-tasks") return { view: "my-tasks", projectId: null, createProject: false, settings: false, authMode: null };
+    if (hash === "#/dashboard" || hash === "#/") return { view: "dashboard", projectId: null, createProject: false, settings: false, authMode: null };
 
     return { view: "not-found", projectId: null, createProject: false, settings: false, authMode: null };
   } catch {
